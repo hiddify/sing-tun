@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,6 +61,10 @@ type System struct {
 	frontHeadroom        int
 	txChecksumOffload    bool
 	multiPendingPackets  bool
+	listenConfig         net.ListenConfig //H
+	listenerAccess       sync.Mutex       //H: tcpListener and tcpListener6 are replaced on recovery
+	closing              atomic.Bool      //H
+	tcpRecoveries        atomic.Uint32    //H
 }
 
 type Session struct {
@@ -124,10 +129,13 @@ func (s *System) ResetNetwork() {
 }
 
 func (s *System) Close() error {
+	s.closing.Store(true) //H: the accept loops end quietly instead of recreating their listeners
 	s.dispatcher.Close()
 	if s.udpNat != nil {
 		s.udpNat.Close()
 	}
+	s.listenerAccess.Lock()         //H
+	defer s.listenerAccess.Unlock() //H
 	return common.Close(
 		s.tcpListener,
 		s.tcpListener6,
@@ -156,39 +164,21 @@ func (s *System) start() error {
 			return nil
 		})
 	}
-	var tcpListener net.Listener
+	s.listenConfig = listener //H
 	var err error
 	if s.inet4NextAddress.IsValid() {
-		for range 3 {
-			tcpListener, err = listenNetworkNamespace(s.ctx, s.netNs, listener, "tcp4", net.JoinHostPort(s.inet4Address.String(), "0"))
-			if !retryableListenError(err) {
-				break
-			}
-			time.Sleep(time.Second)
-		}
+		s.tcpNat4 = NewNat(s.ctx, s.udpTimeout) //H
+		err = s.startTCPListener(false)         //H
 		if err != nil {
 			return err
 		}
-		s.tcpListener = tcpListener
-		s.tcpPort = M.SocksaddrFromNet(tcpListener.Addr()).Port
-		s.tcpNat4 = NewNat(s.ctx, s.udpTimeout)
-		go s.acceptLoop(tcpListener, s.tcpNat4)
 	}
 	if s.inet6NextAddress.IsValid() {
-		for range 3 {
-			tcpListener, err = listenNetworkNamespace(s.ctx, s.netNs, listener, "tcp6", net.JoinHostPort(s.inet6Address.String(), "0"))
-			if !retryableListenError(err) {
-				break
-			}
-			time.Sleep(time.Second)
-		}
+		s.tcpNat6 = NewNat(s.ctx, s.udpTimeout) //H
+		err = s.startTCPListener(true)          //H
 		if err != nil {
 			return err
 		}
-		s.tcpListener6 = tcpListener
-		s.tcpPort6 = M.SocksaddrFromNet(tcpListener.Addr()).Port
-		s.tcpNat6 = NewNat(s.ctx, s.udpTimeout)
-		go s.acceptLoop(tcpListener, s.tcpNat6)
 	}
 	udpNATOptions := s.udpNATOptions
 	udpNATOptions.Handler = s.handler
@@ -420,12 +410,18 @@ func (s *System) processPacket(packet []byte) bool {
 	return writeBack
 }
 
-func (s *System) acceptLoop(listener net.Listener, tcpNat *TCPNat) {
+func (s *System) acceptLoop(listener net.Listener, tcpNat *TCPNat, ipv6 bool) { //H
+	var tempDelay time.Duration //H
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			return
+			listener, tempDelay = s.recoverAccept(listener, err, ipv6, tempDelay) //H
+			if listener == nil {                                                  //H
+				return
+			} //H
+			continue //H
 		}
+		tempDelay = 0 //H
 		connPort := M.SocksaddrFromNet(conn.RemoteAddr()).Port
 		session := tcpNat.LookupBack(connPort, 0)
 		if session == nil {
