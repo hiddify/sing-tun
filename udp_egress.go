@@ -25,6 +25,7 @@ type UDPEgressPoolOptions struct {
 	InterfaceFinder  control.InterfaceFinder
 	InterfaceMonitor DefaultInterfaceMonitor
 	IsExempt         func() bool
+	EphemeralPorts   bool //H: members on port 0, see h_udp_egress.go
 }
 
 type UDPEgressPool struct {
@@ -34,6 +35,7 @@ type UDPEgressPool struct {
 	interfaceFinder      control.InterfaceFinder
 	interfaceMonitor     DefaultInterfaceMonitor
 	isExempt             func() bool
+	ephemeralPorts       bool //H
 	access               sync.Mutex
 	port                 uint16
 	anchorInterfaceIndex int
@@ -69,6 +71,7 @@ func NewUDPEgressPool(options UDPEgressPoolOptions) *UDPEgressPool {
 		interfaceFinder:      options.InterfaceFinder,
 		interfaceMonitor:     options.InterfaceMonitor,
 		isExempt:             options.IsExempt,
+		ephemeralPorts:       options.EphemeralPorts, //H
 		anchorInterfaceIndex: -1,
 		members:              make(map[udpEgressSpec]*udpEgressMember),
 		packetChan:           make(chan udpEgressPacket, 128),
@@ -254,7 +257,7 @@ func (p *UDPEgressPool) listenMember(spec udpEgressSpec) (*net.UDPConn, error) {
 	} else {
 		network = "udp6"
 	}
-	packetConn, err := listenConfig.ListenPacket(context.Background(), network, netip.AddrPortFrom(spec.prefix.Addr(), p.port).String())
+	packetConn, err := listenConfig.ListenPacket(context.Background(), network, netip.AddrPortFrom(spec.prefix.Addr(), p.memberPort()).String()) //H
 	if err != nil {
 		return nil, err
 	}
