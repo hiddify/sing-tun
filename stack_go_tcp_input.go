@@ -319,6 +319,10 @@ func (e *goEngine) inputTCP(conn *GoConn, parsed *forwardPacket) {
 	if conn.dead {
 		return
 	}
+	if conn.resetOnData && len(payload) > 0 && segOffset+int64(len(payload)) > int64(conn.receiveNext) { //H
+		e.resetOnData(conn, tcpHdr) //H
+		return                      //H
+	} //H
 	if len(payload) > 0 || flags&header.TCPFlagFin != 0 {
 		e.deliverSegment(conn, segOffset, payload, flags&header.TCPFlagFin != 0)
 	}
@@ -339,7 +343,7 @@ func (e *goEngine) inputTombstone(conn *GoConn, parsed *forwardPacket) {
 			e.sendAck(conn)
 		}
 	case goDeathAbortLinger:
-		e.sendReset(conn)
+		e.sendResetFor(conn, header.TCP(parsed.transport)) //H
 	}
 }
 
@@ -1002,6 +1006,7 @@ func (e *goEngine) handleCloseRequest(conn *GoConn) {
 		return
 	}
 	conn.finPending = true
+	conn.resetOnData = discard //H
 	e.maybeSendFin(conn)
 	if conn.dead {
 		return

@@ -177,6 +177,7 @@ type GoConn struct {
 	sackPermitted           bool
 	timestampsEnabled       bool
 	discardReceive          bool
+	resetOnData             bool //H: the application closed it: new data is answered with a reset, see h_stack_go_close.go
 	finSent                 bool
 	finAcked                bool
 	ackForced               bool
