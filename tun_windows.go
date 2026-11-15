@@ -46,6 +46,10 @@ type NativeTun struct {
 	weakHostSendDisabled     map[interfaceFamily]string
 	interfaceChangeListener  *winipcfg.InterfaceChangeCallback
 	defaultInterfaceListener *list.Element[DefaultInterfaceUpdateCallback]
+
+	// ipv6Unavailable is set when Windows has no IPv6 on the adapter, so the
+	// tunnel runs on IPv4 alone instead of failing to start.
+	ipv6Unavailable bool
 }
 
 func New(options Options) (WinTun, error) {
@@ -87,6 +91,19 @@ func (t *NativeTun) configure() error {
 		return nil
 	}
 	luid := winipcfg.LUID(t.adapter.LUID())
+	if len(t.options.Inet6Address) > 0 {
+		// With IPv6 disabled (DisabledComponents, or the IPv6 binding removed),
+		// the adapter has no IPv6 interface and every IPv6 call fails with
+		// "Element not found". There is no IPv6 to capture, so go on without it.
+		_, err := luid.IPInterface(winipcfg.AddressFamily(windows.AF_INET6))
+		if errors.Is(err, windows.ERROR_NOT_FOUND) {
+			if t.options.Logger != nil {
+				t.options.Logger.Warn("IPv6 is disabled on this system; the tunnel uses IPv4 only")
+			}
+			t.ipv6Unavailable = true
+			t.options.Inet6Address = nil
+		}
+	}
 	if len(t.options.Inet4Address) > 0 {
 		err := luid.SetIPAddressesForFamily(winipcfg.AddressFamily(windows.AF_INET), t.options.Inet4Address)
 		if err != nil {
@@ -702,7 +719,16 @@ func (t *NativeTun) Close() error {
 	return err
 }
 
+// IPv6Unavailable tells whether the tunnel dropped IPv6 because the system
+// has none. The stack must then leave its IPv6 address out as well.
+func (t *NativeTun) IPv6Unavailable() bool {
+	return t.ipv6Unavailable
+}
+
 func (t *NativeTun) UpdateRouteOptions(tunOptions Options) error {
+	if t.ipv6Unavailable {
+		tunOptions.Inet6Address = nil
+	}
 	t.options = tunOptions
 	if t.options.EXP_ExternalConfiguration {
 		return nil
