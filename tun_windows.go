@@ -105,7 +105,7 @@ func (t *NativeTun) configure() error {
 		}
 	}
 	if len(t.options.Inet4Address) > 0 {
-		err := luid.SetIPAddressesForFamily(winipcfg.AddressFamily(windows.AF_INET), t.options.Inet4Address)
+		err := t.setIPAddresses(luid, winipcfg.AddressFamily(windows.AF_INET), t.options.Inet4Address) //H
 		if err != nil {
 			return E.Cause(err, "set ipv4 address")
 		}
@@ -126,7 +126,7 @@ func (t *NativeTun) configure() error {
 		}
 	}
 	if len(t.options.Inet6Address) > 0 {
-		err := luid.SetIPAddressesForFamily(winipcfg.AddressFamily(windows.AF_INET6), t.options.Inet6Address)
+		err := t.setIPAddresses(luid, winipcfg.AddressFamily(windows.AF_INET6), t.options.Inet6Address) //H
 		if err != nil {
 			return E.Cause(err, "set ipv6 address")
 		}
